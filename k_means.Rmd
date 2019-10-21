@@ -291,7 +291,6 @@ final_df %>%
 ```
 
 
-
 ```{r}
 # Scaling dataset: 
 final_df %>% 
@@ -352,6 +351,7 @@ Based on the results of the K-Means Clustering, customers will be classified int
 - **Group 3** Less purchase, and bring less money to the company.
 
 Before we can use the above Insights to cater to the business strategies, we should consider these following points: the K-means clustering algorithm is very sensitive to outliers. Although the data has been scaled to minimize the impact of these outliers, it does not guarantee that the results will not be deformed.
+
 
 ```{r}
 final_df %>% 
@@ -444,7 +444,6 @@ final_df_normal %>%
   mutate(Group = paste("Group", Group)) -> final_df_clustered
 
 ```
-
 
 
 ```{r}
