@@ -225,7 +225,7 @@ moneySales_Item %>%
   
 ```
 
-Once again we can see the presence of ** principle 80 - 20 **: 80% of the sales of this online retailer comes from 827 product codes (corresponding to 20.59% of product codes):
+Once again we can see the presence of **principle 80 - 20** : 80% of the sales of this online retailer comes from 827 product codes (corresponding to 20.59% of product codes):
 
 ```{r}
 moneySales_Item %>% 
