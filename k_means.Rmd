@@ -1,0 +1,598 @@
+---
+title: "Market Segmentation: K-means Clustering Algorithm" 
+subtitle: "Data Science for Marketing Series"
+author: "Jenny"
+output:
+  html_document: 
+    code_download: true
+    #code_folding: hide
+    highlight: zenburn
+    # number_sections: yes
+    theme: "flatly"
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 6)
+```
+
+
+# Motivations
+
+Customer Segments (or Market Segmentation) allow the companies to be able to utilize their resources (time, finance) to serve their's goals: increasing sales, increasing profits, retaining important customers as well as implementing marketing campaigns more effectively, which  based on the understanding of their customer's behavior, habits, and preferences.
+
+
+# Method and Data 
+
+RFM is a method used for analyzing customer value. It is commonly used in database marketing and direct marketing and has received particular attention in retail and professional services industries.
+
+RFM stands for the three dimensions:
+- **R (Recency)** The value of how recently a customer purchased at the establishment 
+- **F (Frequency)** How frequent the customer’s transactions are at the establishment
+- **M (Monetary)** The dollar (or pounds in our case) value of all the transactions that the customer made at the establishment
+
+F and M are inputs for a period (1 year, a month, a period). Particularly R depends on the modeler preference and it does not affect the model's results.
+
+Data can be download [here](https://www.kaggle.com/carrie1/ecommerce-data). First, let's have a look at the data:
+
+```{r}
+# Load data: 
+rm(list = ls())
+library(tidyverse)
+library(magrittr)
+library(knitr)
+my_df <- read_csv("/Users/jennynguyen/Downloads/data.csv")
+
+# See the first 10 transaction with the first 4 columns
+set.seed(29)
+my_df %>% 
+  sample_n(10) %>% 
+  select(1:4) %>% 
+  kable()
+
+# See the first 10 transaction with the last 4 columns
+my_df %>% 
+  sample_n(10) %>% 
+  select(5:8) %>% 
+  kable()
+```
+
+The variables are really descriptive.  We should also make a preliminary assessment of the quality of the data. First of all, let have a look at the missing rate:
+
+```{r}
+
+na_rate <- function(x) {100*sum(is.na(x)) / length(x)}
+
+my_df %>%
+  summarise_all(na_rate)
+```
+
+Approximately 27% of stockcode is without description. Similarly, ~ 25% customters are not labled with IDs, but it's not quite important in this situation.
+
+The measures in this data set - if they are quantitative variables, must be non-negative. So we also need to check whether we have any negative record or not. 
+
+
+```{r}
+
+negative_dectect <- function(x) {100*sum(x <= 0) / length(x)}
+
+
+sapply(my_df %>% select(Quantity, UnitPrice), negative_dectect)
+
+# Remove negative records
+my_df %>% 
+  filter(Quantity > 0, UnitPrice > 0) -> my_df
+```
+
+
+Because we need an exact time to calculate R so that InvoiceDate will need to be modifed.
+
+```{r}
+library(lubridate)
+
+my_df %>% 
+  mutate(time_ymd_hm = mdy_hm(InvoiceDate), 
+         time_hour = hour(time_ymd_hm), 
+         time_min = minute(time_ymd_hm), 
+         w_day = wday(time_ymd_hm, label = TRUE, abbr = TRUE), 
+         time_mon = month(time_ymd_hm, label = TRUE, abbr = TRUE), 
+         time_ymd = InvoiceDate %>% str_split(" ", simplify = TRUE) %>% data.frame() %>% pull(X1) %>% mdy) -> my_df
+```
+
+# Exploratory Data Analysis
+
+This analysis is taken to look for some insights. For example, sales (accurate to the minute) have two spike times over 70,000 records. These are unusual:
+
+
+```{r}
+library(hrbrthemes)
+theme_set(theme_modern_rc())
+
+my_df %>% 
+  group_by(time_ymd_hm) %>% 
+  summarise(sales = sum(Quantity)) %>% 
+  ungroup() -> sales_byTime_hm
+
+sales_byTime_hm %>% 
+  ggplot(aes(time_ymd_hm, sales)) + 
+  geom_line() + 
+  labs(title = "Figure 1: Unit Sales by Min", x = "Time", y = "Quantity")
+  
+```
+
+Sales by day tended to increase in the last stage. On the other hand, there are two days of abnormal sales (which is predictable):
+
+```{r}
+my_df %>% 
+  group_by(time_ymd) %>% 
+  summarise(sales = sum(Quantity)) %>% 
+  ungroup() -> sales_byTime
+
+sales_byTime %>% 
+  ggplot(aes(time_ymd, sales)) + 
+  geom_line() + 
+  geom_point(color = "firebrick") + 
+  labs(title = "Figure 2: Unit Sales by Day", x = "Time", y = "Quantity")
+
+```
+
+From Figure 2 we also see that there is another anomaly: there are two times where the data is not continuous. Specifically, from 2010-12-22 to 2011-01-03, there are 12 consecutive days of data missing.
+
+
+```{r}
+sales_byTime %>% 
+  mutate(lag1 = lag(time_ymd, n = 1L)) %>% 
+  mutate(duration_date = time_ymd - lag1) %>% 
+  mutate(duration_date = as.numeric(duration_date)) %>% 
+  slice(which.max(duration_date)) 
+
+```
+
+
+
+```{r}
+my_df %>% 
+  mutate(money = Quantity*UnitPrice) -> my_df
+
+my_df %>% 
+  group_by(time_ymd_hm) %>% 
+  summarise(moneySales = sum(money)) %>% 
+  ungroup() -> sales_byTime_hm_money
+
+sales_byTime_hm_money %>% 
+  ggplot(aes(time_ymd_hm, moneySales)) + 
+  geom_line() + 
+  labs(title = "Figure 3: Monetary Sales by Min", x = "Time", y = "")
+
+my_df %>% 
+  group_by(time_ymd) %>% 
+  summarise(moneySales = sum(money)) %>% 
+  ungroup() -> sales_byTime_money
+
+sales_byTime_money %>% 
+  ggplot(aes(time_ymd, moneySales)) + 
+  geom_line() + 
+  geom_point(color = "firebrick") + 
+  labs(title = "Figure 4: Monetary Sales by Day", x = "Time", y = "")
+  
+```
+
+Doanh thu cả theo số lượng bán và tiền ở 4 tháng cuối năm cao hơn hẳn các tháng còn lại trong năm: 
+
+
+```{r}
+my_df %>% 
+  group_by(time_mon) %>% 
+  summarise_each(funs(sum), Quantity) %>% 
+  mutate(Quantity = Quantity / 1000) %>% 
+  ggplot(aes(time_mon, Quantity)) + 
+  geom_col() + 
+  theme(panel.grid.major.x = element_blank()) + 
+  labs(title = "Figure 5: Unit Sales in thousands by Month", x = "Time", y = "Quanlity") + 
+  scale_y_continuous(limits = c(0, 800))
+
+my_df %>% 
+  group_by(time_mon) %>% 
+  summarise_each(funs(sum), money) %>% 
+  mutate(money = money / 1000) %>% 
+  ggplot(aes(time_mon, money)) + 
+  geom_col() + 
+  theme(panel.grid.major.x = element_blank()) + 
+  labs(title = "Figure 6: Monetary Sales in thousands by Month", x = "Time", y = "")
+  
+```
+
+More than 4000 items are being sold, but the revenue distribution is not even:
+
+```{r}
+my_df %>% 
+  group_by(Description) %>% 
+  summarise(sales = sum(money)) %>% 
+  ungroup() %>% 
+  arrange(-sales) %>% 
+  mutate(Description = factor(Description, levels = Description)) %>% 
+  mutate(total = sum(sales)) %>% 
+  mutate(money_percent = sales / total) %>% 
+  mutate(cum_money = cumsum(money_percent)) -> moneySales_Item
+
+moneySales_Item %>% 
+  ggplot(aes(Description, sales)) + 
+  geom_col() + 
+  theme(panel.grid.major.x = element_blank()) + 
+  theme(axis.text.x = element_blank()) + 
+  labs(title = "Figure 6: Money Sales by Product", x = "", y = "")
+  
+```
+
+Once again we can see the presence of ** principle 80 - 20 **: 80% of the sales of this online retailer comes from 827 product codes (corresponding to 20.59% of product codes):
+
+```{r}
+moneySales_Item %>% 
+  filter(cum_money <= 0.8) -> top80_sales
+
+top80_sales %>% nrow() / nrow(moneySales_Item)
+```
+
+Products which bring the most revenue:
+
+```{r}
+moneySales_Item %>% 
+  select(-total) %>% 
+  head() %>% 
+  kable()
+```
+
+The company may use this information for its business purposes. For example, the company may prioritize shipping for orders listed above or prioritize preparing inventory for these codes. In other words, it is necessary to focus on logistics (logistics - warehousing - transportation) for the brands that bring up to 80% of the revenue for the company.
+
+# Customer Segments
+
+Apply the K-means Clustering for Customer Segmentation with RFM method: 
+
+```{r}
+
+y <- as.duration(ymd_hm("2011-12-31 24:59") - my_df$time_ymd_hm) %>% as.numeric()
+y <- round(y / (3600*24), 0)
+
+# Create Recency: 
+my_df %>% mutate(recency = y) -> my_df
+
+# Purchase ammount for individual customers: 
+my_df %>% 
+  group_by(CustomerID) %>% 
+  summarise_each(funs(sum), money) %>% 
+  ungroup() -> df_money
+
+# R: 
+my_df %>% 
+  group_by(CustomerID) %>% 
+  summarise_each(funs(min), recency) %>% 
+  ungroup() -> df_recency
+
+# F: 
+my_df %>% 
+  group_by(CustomerID) %>% 
+  count() %>% 
+  ungroup() %>% 
+  rename(freq = n) -> df_freq
+
+# Data for EDA:  
+
+df_money %>% 
+  full_join(df_recency, by = "CustomerID") %>% 
+  full_join(df_freq, by = "CustomerID") %>% 
+  mutate(CustomerID = as.character(CustomerID)) -> final_df
+
+ 
+final_df %>% 
+  head() %>% 
+  kable()
+
+```
+
+
+
+```{r}
+# Scaling dataset: 
+final_df %>% 
+  mutate_if(is.numeric, function(x) {(x - min(x)) / (max(x) - min(x))}) %>% 
+  select(-CustomerID) -> final_df_scaled
+```
+
+
+Optimal K will be chosen following this method: [Elbow Method](https://bl.ocks.org/rpgove/0060ff3b656618e9136b): 
+
+```{r}
+set.seed(29)
+wss <- sapply(1:10, 
+              function(k){kmeans(final_df_scaled %>% sample_frac(0.2), 
+                                 k, nstart = 30)$tot.withinss})
+
+
+u <- data.frame(k = 1:10, WSS = wss)
+
+u %>% 
+  ggplot(aes(k, WSS)) + 
+  geom_line() + 
+  geom_point() + 
+  geom_point(data = u %>% filter(k == 3), color = "red", size = 3) + 
+  scale_x_continuous(breaks = seq(1, 10, by = 1)) + 
+  labs(title = "Figure 7: The Optimal Number of Clusters, Elbow Method", x = "Number of Clusters (K)") + 
+  theme(panel.grid.minor = element_blank())
+```
+
+
+
+```{r}
+# Cluster with K = 3 
+set.seed(123)
+km.res <- kmeans(final_df_scaled, 3, nstart = 30)
+
+final_df %>% 
+  mutate(Group = km.res$cluster) %>% 
+  mutate(Group = paste("Group", Group)) -> final_df_clustered
+
+
+# Groups of customer: 
+final_df_clustered %>% 
+  group_by(Group) %>% 
+  summarise_each(funs(mean), money, recency, freq) %>% 
+  ungroup() %>% 
+  mutate_if(is.numeric, function(x) {round(x, 0)}) %>% 
+  arrange(-money) 
+
+```
+
+Based on the results of the K-Means Clustering, customers will be classified into the following 3 groups: 
+
+- **Group 2** Group has those customers who spend a lot, make the purchase very often, and have the smallest Recency. This group is called * Champions *. The way of "taking care" of these customers is well described [here] (https://www.putler.com/rfm-analysis/). On average, each customer in this group spends £ 3308.
+
+- **Group 1** This is *Loyal Customers*. This is a group of customers with the potential to turn into Champions if the company knows how to implement customer care and promotion strategies appropriately.
+
+- **Group 3** Less purchase, and bring less money to the company.
+
+Before we can use the above Insights to cater to the business strategies, we should consider these following points: the K-means clustering algorithm is very sensitive to outliers. Although the data has been scaled to minimize the impact of these outliers, it does not guarantee that the results will not be deformed.
+
+```{r}
+final_df %>% 
+  ggplot(aes(CustomerID, money)) + 
+  geom_col() + 
+  theme(panel.grid.minor.x = element_blank()) + 
+  theme(panel.grid.major.x = element_blank()) + 
+  theme(panel.grid.minor.y = element_blank()) + 
+  theme(axis.text.x = element_blank()) + 
+  labs(title = "Figure 8: Spending by Customer", y = "")
+```
+
+Figure 8 shows some customers with massive spending. They may not be individual customers but maybe the form of a small store to buy and resell. Similarly, the buying frequency (Figure 9, the unit on the Y-axis is 1000):
+
+
+```{r}
+final_df %>% 
+  mutate(freq = freq / 1000) %>% 
+  ggplot(aes(CustomerID, freq)) + 
+  geom_col() + 
+  theme(panel.grid.minor.x = element_blank()) + 
+  theme(panel.grid.major.x = element_blank()) + 
+  theme(panel.grid.minor.y = element_blank()) + 
+  theme(axis.text.x = element_blank()) + 
+  labs(title = "Figure 9: Frequency by Customer", y = "")
+```
+
+
+Because the K-Means Clustering is very sensitive to outliers, so we should split these outliers for separate analysis while focusing on those common customers.
+
+```{r}
+# Identify Outlier: 
+outlier_label <- function(x) {
+  a <- mean(x)
+  b <- sd(x)
+  th1 <- a - 3*b
+  th2 <- a + 3*b
+  y <- case_when(x >= th1 & x <= th2 ~ "Normal", TRUE ~ "Outlier")
+  return(y)
+  
+}
+
+# Only apply Normal Observation for K-means Clustering: 
+
+final_df %>% 
+  mutate(nor_money = outlier_label(money), nor_freq = outlier_label(freq)) %>% 
+  filter(nor_money == "Normal", nor_freq == "Normal") %>% 
+  select(1:4) -> final_df_normal
+
+final_df_normal %>% 
+  mutate_if(is.numeric, function(x) {(x - min(x)) / (max(x) - min(x))}) -> final_df_normal_scaled
+
+```
+
+Re-apply K means clustering - Find the optimal K: 
+
+
+```{r}
+set.seed(29)
+wss <- sapply(1:10, 
+              function(k){kmeans(final_df_normal_scaled %>% select(-CustomerID) %>% sample_frac(0.2), 
+                                 k, nstart = 30)$tot.withinss})
+
+
+u <- data.frame(k = 1:10, WSS = wss)
+
+u %>% 
+  ggplot(aes(k, WSS)) + 
+  geom_line() + 
+  geom_point() + 
+  geom_point(data = u %>% filter(k == 4), color = "red", size = 3) + 
+  scale_x_continuous(breaks = seq(1, 10, by = 1)) + 
+  labs(title = "Figure 10: The Optimal Number of Clusters, Elbow Method", 
+       subtitle = "Outliers are are removed from sample.", 
+       x = "Number of Clusters (K)") + 
+  theme(panel.grid.minor = element_blank())
+```
+
+
+After removing outliers, optimal K is 4.
+
+```{r}
+# Grouping with k = 4: 
+set.seed(123)
+km.res4 <- kmeans(final_df_normal_scaled %>% select(-CustomerID), 4, nstart = 30)
+
+
+final_df_normal %>% 
+  mutate(Group = km.res4$cluster) %>% 
+  mutate(Group = paste("Group", Group)) -> final_df_clustered
+
+```
+
+
+
+```{r}
+#  Groups of customers description: 
+final_df_clustered %>% 
+  group_by(Group) %>% 
+  summarise_each(funs(mean), money, recency, freq) %>% 
+  ungroup() %>% 
+  mutate_if(is.numeric, function(x) {round(x, 0)}) %>% 
+  arrange(-money) %>% 
+  kable()
+```
+
+Calculate the proportion of revenue from these customer groups:
+
+```{r}
+final_df_clustered %>% 
+  group_by(Group) %>% 
+  summarise_each(funs(sum, mean, median, min, max, sd, n()), money) %>% 
+  ungroup() %>% 
+  mutate(per_sale = round(100*sum / sum(sum), 2)) -> sale_group
+
+
+library(ggthemes)
+
+sale_group %>% 
+  ggplot(aes(reorder(Group, per_sale), per_sale, fill = Group, color = Group)) + 
+  geom_col(width = 0.5, show.legend = FALSE) + 
+  coord_flip() + 
+  geom_text(aes(label = paste(per_sale, paste0(paste0("(", "%")), ")")), 
+            hjust = -0.05, color = "white", size = 5) + 
+  scale_y_continuous(limits = c(0, 90), expand = c(0.01, 0)) + 
+  scale_fill_tableau() + 
+  scale_color_tableau() + 
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) + 
+  theme(panel.grid.major = element_blank()) + 
+  theme(panel.grid.minor = element_blank()) + 
+  labs(x = NULL, title = "Figure 11: Share of Sales by Customer Group")
+
+```
+
+
+Group 4 accounts for 49.1% of total customers and is the group that brings nearly 75% of revenue to the company:
+
+```{r}
+sale_group %>% 
+  select(Group, n) %>% 
+  mutate(total = sum(n)) %>% 
+  mutate(label = 100*n / total) %>% 
+  mutate(label = paste(round(label, 1), "%")) %>% 
+  ggplot(aes(Group, n, fill = Group, color = Group)) + 
+  geom_col(width = 0.5, show.legend = FALSE) + 
+  geom_text(aes(label = label), color = "white", vjust = 1.4, size = 5) + 
+  scale_fill_tableau() + 
+  scale_color_tableau() + 
+  theme(panel.grid.minor = element_blank()) + 
+  theme(panel.grid.major.x = element_blank()) + 
+  labs(x = NULL, y = NULL, title = "Figure 12: Number of Customers by Group")
+  
+```
+
+
+# Group Labelling
+
+To answer the question **a consumer whose behavior is described by R, F and M, which group will this customer be?**.  Many approaches/models can be applied to this problem and one of them is to use classification algorithms, for example, Random Forest:
+
+```{r}
+# Data for ML:  
+df_forML <- final_df_clustered %>% 
+  select(- CustomerID) %>% 
+  mutate(Group = as.factor(Group))
+
+# Split data into training, testing:
+
+library(caret)
+set.seed(1)
+id <- createDataPartition(df_forML$Group, p = 0.8, list = FALSE)
+df_train <- df_forML[id, ]
+df_test <- df_forML[-id, ]
+
+# Train Random Forest: 
+set.seed(1)
+my_rf <- train(Group ~., method = "rf", data = df_train)
+
+```
+
+As the business getting imput for a new customer with M = 1757.55, R = 41, F = 73, which segmentation that customer will be:   
+```{r}
+
+cus1 <- df_test %>% 
+  slice(1) %>% 
+  select(-Group)
+
+cus1 %>% 
+  kable()
+
+```
+
+That customer will be in group 4: 
+
+```{r}
+predict(my_rf, cus1) %>% as.character()
+```
+
+Model evaluation: 
+
+```{r}
+
+pred <- predict(my_rf, df_test)
+
+
+confusionMatrix(pred, df_test$Group)
+```
+
+
+```{r}
+
+# Statistical description for the prediction on test data: 
+df_test %>% 
+  mutate(GroupPredicted = pred) %>% 
+  group_by(GroupPredicted) %>% 
+  summarise_each(funs(mean), money, recency, freq) %>% 
+  mutate_if(is.numeric, function(x) {round(x, 0)}) %>% 
+  kable()
+
+# Statistical description for the prediction on train data compared to test data: 
+df_train %>% 
+  group_by(Group) %>% 
+  summarise_each(funs(mean), money, recency, freq) %>% 
+  mutate_if(is.numeric, function(x) {round(x, 0)}) %>% 
+  kable()
+
+  
+```
+
+
+
+# References
+
+1. Chapman, C., & Feit, E. M. (2019). R for marketing research and analytics. New York, NY: Springer.
+2. Chen, D., Sain, S. L., & Guo, K. (2012). Data mining for the online retail industry: A case study of RFM model-based customer segmentation using data mining. Journal of Database Marketing & Customer Strategy Management, 19(3), 197-208.
+3. Khajvand, M., & Tarokh, M. J. (2011). Estimating customer future value of different customer segments based on adapted RFM model in retail banking context. Procedia Computer Science, 3, 1327-1332.
+4. Shmueli, G., Bruce, P. C., Yahav, I., Patel, N. R., & Lichtendahl Jr, K. C. (2017). Data mining for business analytics: concepts, techniques, and applications in R. John Wiley & Sons.
+5. Zakrzewska, D., & Murlewski, J. (2005, September). Clustering algorithms for bank customer segmentation. In 5th International Conference on Intelligent Systems Design and Applications (ISDA'05) (pp. 197-202). IEEE.
+
+
+
+
+
