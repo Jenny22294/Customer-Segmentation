@@ -178,7 +178,6 @@ sales_byTime_money %>%
   
 ```
 
-Doanh thu cả theo số lượng bán và tiền ở 4 tháng cuối năm cao hơn hẳn các tháng còn lại trong năm: 
 
 
 ```{r}
